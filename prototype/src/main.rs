@@ -1,3 +1,5 @@
+use stateworks::word_counter;
+
 mod stateworks {
     //! This module contains a very naive and basic implementation of a state machine
     //! structure that will allow the user to count words. There will be no worry about
@@ -22,7 +24,7 @@ mod stateworks {
     //! That limitations will make it much simpler to implement. Later, we try to add more
     //! complexity and optimizations.
 
-    use std::collections::HashMap;
+    use std::collections::{HashMap, HashSet};
 
     // each state machine defines a set of virtual inputs and virtual outputs
     // Both are simply enums:
@@ -35,12 +37,13 @@ mod stateworks {
     // char into the VI.
     //
     // Who decides when the input will be triggered? the programmer.
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
     enum VirtualInput {
         /// Read anything that is not an alphanumeric char.
         ReadOther,
         ReadAlphanumeric,
-        /// Read the last char of the file
-        ReadEOF,
+        // /// Read the last char of the file
+        //ReadEOF,
         // TODO: think about it: should I create an Always VI to represent a condition that
         // accepts any substate of the VI set? Or should I implement that in the Condition
         // struct?
@@ -51,26 +54,30 @@ mod stateworks {
     // only defining the simplest subset necessary for this state machine to work. For
     // example, in this situation, it is interesting to define a generic Counter object,
     // which could be used by any project.
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
     enum VirtualOutput {
         IncrementCounter,
-        /// This action will be triggered by any input action of the type ReadEOF.
-        /// After generating this output, the return of the function will be triggered.
-        Return,
+        // /// This action will be triggered by any input action of the type ReadEOF.
+        // /// After generating this output, the return of the function will be triggered.
+        //Return,
     }
 
+    #[derive(Debug, Clone)]
     struct Condition {
         // At the moment, only a bunch of AND conditions will be enough. Also, maybe storing
         // them as vector is not the best choice, because we will make set operations with
         // them. But that is something for the future..
-        and: Vec<VirtualInput>,
+        and: HashSet<VirtualInput>,
     }
 
+    #[derive(Debug, PartialEq, Eq, Hash, Clone)]
     enum State {
         Init,
         InWord,
         OutWord,
     }
 
+    #[derive(Debug, Clone)]
     struct StateSpec<'a> {
         name: &'a str,
         entry_actions: Vec<VirtualOutput>,
@@ -79,9 +86,11 @@ mod stateworks {
         transitions: Vec<(Condition, State)>,
     }
 
+    #[derive(Debug)]
     struct StateMachine<'a> {
         current_state: State,
-        states: Vec<StateSpec<'a>>,
+        states: HashMap<State, StateSpec<'a>>,
+        // Input actions that will be executed always, regardless of the current state
         always: Vec<(Condition, VirtualOutput)>,
     }
 
@@ -97,7 +106,7 @@ mod stateworks {
                 input_actions: vec![],
                 transitions: vec![(
                     Condition {
-                        and: vec![VirtualInput::Always],
+                        and: HashSet::from_iter(vec![VirtualInput::Always]),
                     },
                     State::InWord,
                 )],
@@ -110,13 +119,13 @@ mod stateworks {
                 transitions: vec![
                     (
                         Condition {
-                            and: vec![VirtualInput::ReadOther],
+                            and: HashSet::from_iter(vec![VirtualInput::ReadOther]),
                         },
                         State::OutWord,
                     ),
                     (
                         Condition {
-                            and: vec![VirtualInput::ReadAlphanumeric],
+                            and: HashSet::from_iter(vec![VirtualInput::ReadAlphanumeric]),
                         },
                         State::InWord,
                     ),
@@ -129,20 +138,20 @@ mod stateworks {
                 exit_actions: vec![],
                 input_actions: vec![(
                     Condition {
-                        and: vec![VirtualInput::ReadAlphanumeric],
+                        and: HashSet::from_iter(vec![VirtualInput::ReadAlphanumeric]),
                     },
                     VirtualOutput::IncrementCounter,
                 )],
                 transitions: vec![
                     (
                         Condition {
-                            and: vec![VirtualInput::ReadOther],
+                            and: HashSet::from_iter(vec![VirtualInput::ReadOther]),
                         },
                         State::OutWord,
                     ),
                     (
                         Condition {
-                            and: vec![VirtualInput::ReadAlphanumeric],
+                            and: HashSet::from_iter(vec![VirtualInput::ReadAlphanumeric]),
                         },
                         State::InWord,
                     ),
@@ -151,16 +160,77 @@ mod stateworks {
 
             StateMachine {
                 current_state: State::Init,
-                states: vec![init, in_word, out_word],
-                always: vec![(
+                states: HashMap::from_iter(vec![
+                    (State::Init, init),
+                    (State::InWord, in_word),
+                    (State::OutWord, out_word),
+                ]),
+                always: vec![/*(
                     Condition {
-                        and: vec![VirtualInput::ReadEOF],
+                        and: HashSet::from_iter(vec![VirtualInput::ReadEOF]),
                     },
                     VirtualOutput::Return,
-                )],
+                )*/],
             }
-            // TODO continue from here...
         }
+
+        fn emit_virtual_output(&mut self, vo: VirtualOutput) {}
+        // in this case, it is very simple to emit each VI at time, but in the future, may
+        // be interesting to investigate the approach of registering the VIs for the input
+        // preprocessor and then emit all of them at once.
+        fn emit_virtual_input(&mut self, vi: VirtualInput) {
+            // here, we start the cycle for the VFSM execution model. For this simplified
+            // state machine implementation, always, at this point, the VFSM will be in the
+            // idle state, waiting for VIs to come.
+            let current_state = self.states[&self.current_state].clone(); // TODO optimize
+                                                                          // that clone
+
+            let condition = Condition {
+                and: HashSet::from_iter(vec![vi]),
+            };
+
+            // check for input actions
+
+            for (inpus_action_condition, vo) in current_state.input_actions {
+                if condition.and.is_subset(&inpus_action_condition.and) {
+                    //TODO this may trigger other virtual inputs, need to handle this...
+                    // One aspect is: should I gather some virtual outputs from the input
+                    // actions and only them execute them or should I execute one by one?
+                    // What are the pros and cons of each approach? is it interesting to
+                    // have models for both? are there use cases for both approaches or they
+                    // are equivalent?
+                    //
+                    // For this current state machine, VO are not able to emit VI, thus, we
+                    // do not need to worry about that right now, but for more complex state
+                    // machines, I want to handle this situation.
+
+                    // execute the input action
+                    self.emit_virtual_output(vo);
+                }
+            }
+
+            // check for transition conditions
+            for (transition_condition, next_state) in current_state.transitions {
+                // TODO continue from here...
+                // it is interesting to decouple the execution model from the emission of
+                // VI
+            }
+        }
+
+        // This method will make the interface between the state machine with the IO from
+        // function.
+        fn consume_char(&mut self, c: char) {
+            match c {
+                c if c.is_alphanumeric() => self.emit_virtual_input(VirtualInput::ReadAlphanumeric),
+                _ => self.emit_virtual_input(VirtualInput::ReadOther),
+            };
+        }
+    }
+
+    pub fn word_counter(text: &str) -> u32 {
+        let state_machine = StateMachine::new();
+
+        // process the input into
     }
 }
 
@@ -178,7 +248,7 @@ fn word_counter_reference(text: &str) -> u32 {
  * return an u32.
  */
 fn word_counter_state_machine(text: &str) -> u32 {
-    todo!()
+    word_counter(text)
 }
 
 fn main() {
