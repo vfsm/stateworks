@@ -1,14 +1,280 @@
-use stateworks::word_counter;
+//use stateworks::word_counter;
+
+/*
+Basic design for this prototype.
+Given that the application of state machines to software design is not so obvious as for hardware, I felt the necessity to make a basic design strategy before implementing this prototype. Upon starting the implementation, I noticed how little I know about state machines as systems for controlling the state of the program. I found a lot of situations where multiple choices could have been made, and that made the design very confusing. Thus, before starting the implementation, I will start with a basic design for the prototype.
+
+First, the main goals for this prototype:
+1. Allow the use of state machine to control a word counter function.
+2. Improve my understanding of state machines applied to software engineering.
+3. Separate the control flow, or part of it, from the data flow. The control flow will be handled by the state machine. The data flow, will be handled by the user-functions and by the other IO-objects like counters, timers, etc.
+
+We are going to start with a Function based state machine. That means that the programmer will only interface with the state machine through the state machine function.
+
+In our example, the function will be `fn word_counter(text:&str)->u32`. The state machine will be instantiated only inside the function and the programmer will not interact directly with it, only with its function.
+
+
+For this prototype, we are going to need the following items:
+1 - A counter to store the number of words counted until the moment
+2 - State machine for the word counter
+3 - Definition on how the VI and VO will be handled
+4 - An execution model for the state machine and all the objects of the RTDB
+
+# State Machine
+Each state machine will consist of a set of states. Each state will be associated with a table that defines (1) - input actions associated with conditions, (2) - transition actions (although the book suggest not using it, I think it may make the design easier and clearer sometimes), (3) - Entry actions, (4) - Exit actions, (5) - transitions, describing the condition, the next state and the actions that will be taken.
+
+# Virtual Inputs
+We may have multiple types of VI. For example: one-time signal, static signal, limited time signals (signals that may have limited time/cycles of use in the execution model). But, for this prototype, only two of them will be used: one-time and static signals. One time signals will be consumed after, at most, the first state transition (we may think and investigate the future possibility of one-time signals that last multiple state transitions, but that may not be something useful), and if no state transition was done, they will be consumed when the execution returns to idle state. Static signals will last until they are changed.
+
+About static signals, we may have two possible approaches, first, allow their use for input actions but only when they change (equivalent to a change of state which generates one-time signal), and, second, does not allow them in input actions. I think it is a good idea to allow them in the input action.
+
+# Execution model
+
+
+# Draft: important aspects to discuss and remember during implementation
+
+1. Be careful to avoid an implementation of a pure event driven design. I do not want to code the state of the variables into the state of the state machine.
+
+*/
+
+use prototype_stateworks::StateMachine;
+
+mod prototype_stateworks {
+    use std::{
+        collections::{HashMap, HashSet},
+        sync::OnceLock,
+    };
+
+    // First, let's build a very simple state machine
+    // It will have a programming interface to receive a stream of chars and, for each char,
+    // it will generate some VI value that will make the state machine update its state
+
+    enum VirtualInputType {
+        Event,
+        StaticSignal,
+    }
+
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+    enum VirtualInput {
+        // IO-Object: CharStreamInput
+        ReadAlphanumeric,
+        ReadOther,
+
+        // Always static signal
+        Always,
+    }
+    impl VirtualInput {
+        fn r#type(&self) -> VirtualInputType {
+            match self {
+                VirtualInput::ReadAlphanumeric => VirtualInputType::Event,
+                VirtualInput::ReadOther => VirtualInputType::Event,
+                VirtualInput::Always => VirtualInputType::StaticSignal,
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    enum VirtualOutput {}
+
+    impl VirtualOutput {
+        fn execute(&self) {
+            println!("Executing: {self:?}")
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct Condition(HashSet<VirtualInput>);
+
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
+    enum State {
+        Init,
+        Alphanumeric,
+        Other,
+    }
+
+    #[derive(Debug, Clone)]
+    struct StateSpec {
+        name: &'static str,
+        entry_actions: Vec<VirtualOutput>,
+        exit_actions: Vec<VirtualOutput>,
+        transition_actions: Vec<VirtualOutput>,
+        input_actions: Vec<(Condition, VirtualOutput)>,
+        transitions: Vec<(Condition, State)>,
+    }
+
+    #[derive(Debug)]
+    pub struct StateMachine {
+        current_state: State,
+        virtual_input: HashSet<VirtualInput>,
+        always: Vec<(Condition, VirtualOutput)>,
+    }
+    static STATES: OnceLock<HashMap<State, StateSpec>> = OnceLock::new();
+
+    fn get_state_spec(state: State) -> &'static StateSpec {
+        &STATES.get_or_init(|| {
+            HashMap::from_iter(vec![
+                (
+                    State::Init,
+                    StateSpec {
+                        name: "init",
+                        entry_actions: vec![],
+                        exit_actions: vec![],
+                        transition_actions: vec![],
+                        input_actions: vec![],
+                        transitions: vec![(
+                            Condition(HashSet::from_iter(vec![VirtualInput::Always])),
+                            State::Other,
+                        )],
+                    },
+                ),
+                (
+                    State::Alphanumeric,
+                    StateSpec {
+                        name: "alphanumeric",
+                        entry_actions: vec![],
+                        exit_actions: vec![],
+                        transition_actions: vec![],
+                        input_actions: vec![],
+                        transitions: vec![(
+                            Condition(HashSet::from_iter(vec![VirtualInput::ReadOther])),
+                            State::Other,
+                        )],
+                    },
+                ),
+                (
+                    State::Other,
+                    StateSpec {
+                        name: "other",
+                        entry_actions: vec![],
+                        exit_actions: vec![],
+                        transition_actions: vec![],
+                        input_actions: vec![],
+                        transitions: vec![(
+                            Condition(HashSet::from_iter(vec![VirtualInput::ReadAlphanumeric])),
+                            State::Alphanumeric,
+                        )],
+                    },
+                ),
+            ])
+        })[&state]
+    }
+    impl StateMachine {
+        pub fn init() -> Self {
+            let mut state_machine = StateMachine {
+                virtual_input: HashSet::new(),
+                current_state: State::Init,
+                always: vec![],
+            };
+            // initiate the state machine
+            state_machine.execute();
+            state_machine
+        }
+        fn accepts_condition(&self, condition: &Condition) -> bool {
+            let condition = &condition.0;
+            condition.contains(&VirtualInput::Always) || condition.is_subset(&self.virtual_input)
+        }
+
+        fn set_state(&mut self, next_state: State) {
+            self.current_state = next_state;
+        }
+
+        fn execute(&mut self) {
+            let mut current_state = get_state_spec(self.current_state);
+            println!("┌─────────────────────────────────────────");
+            println!("│ Executing the state machine");
+            println!("│ Current state: {:?}", self.current_state);
+
+            println!("├─────────────────────────────────────────");
+            println!("│ Checking for input actions:");
+            // check if there is any input action
+
+            for (condition, virtual_output) in &current_state.input_actions {
+                if self.accepts_condition(condition) {
+                    println!("│  ✓ Condition met: {condition:?}");
+                    println!("│    Executing: {virtual_output:?}");
+                    virtual_output.execute();
+                }
+            }
+
+            // Execute every transition
+            let mut need_to_check_for_transition;
+            println!("├─────────────────────────────────────────");
+            println!("│ Checking for transitions:");
+            loop {
+                need_to_check_for_transition = false;
+                for (condition, next_state) in &current_state.transitions {
+                    if self.accepts_condition(condition) {
+                        println!("│  ✓ Transition triggered: {condition:?} → {next_state:?}");
+
+                        println!("│    ┌─ Executing transition actions");
+                        for virtual_output in &current_state.transition_actions {
+                            println!("│    │  • {virtual_output:?}");
+                            virtual_output.execute();
+                        }
+
+                        // execute exit actions
+                        println!("│    ├─ Executing exit actions");
+                        for virtual_output in &current_state.exit_actions {
+                            println!("│    │  • {virtual_output:?}");
+                            virtual_output.execute();
+                        }
+
+                        // Make the transition
+                        self.set_state(*next_state);
+                        current_state = get_state_spec(self.current_state);
+                        println!("│    │");
+                        println!("│    └─ State changed to: {next_state:?}");
+
+                        println!("│       ┌─ Executing entry actions");
+                        for virtual_output in &current_state.entry_actions {
+                            println!("│       │  • {virtual_output:?}");
+                            virtual_output.execute();
+                        }
+                        println!("│       └─────────────────────────");
+                        need_to_check_for_transition = true;
+                        break;
+                    }
+                }
+                if !need_to_check_for_transition {
+                    break;
+                }
+            }
+            println!("└─────────────────────────────────────────");
+            println!("State machine returned to idle");
+        }
+    }
+
+    /*
+    struct VFSM {}
+
+    impl VFSM {
+        // execute a cycle of execution
+        fn execute(&self) {
+            // Check for input action condition
+        }
+
+        fn add_char_to_stream(&self, c: char) {
+            if c.is_alphanumeric() {
+                // emit ReadAlphanumeric
+                return;
+            }
+            // emit ReadOther
+        }
+    }
+    */
+}
 
 mod stateworks {
+    /*
     //! This module contains a very naive and basic implementation of a state machine
     //! structure that will allow the user to count words. There will be no worry about
     //! optimizations at the moment.
     //!
-    //! The model to be implemented is a very basic homogeneous iterative synchronous
+    //! The model to be implemented is a very basic passive homogeneous iterative synchronous
     //! function state
     //! machine (HISFSM).
     //! The meaning is the following:
+    //! - Passive: it will only execute the VFSM model execution when triggered by the code.
     //! - Homogeneous: the user will only be able to send one type of input to the machine,
     //! in this case, chars.
     //! - Iterative: the state machine will work on an iterative fashion. Each iteration,
@@ -23,6 +289,36 @@ mod stateworks {
     //!
     //! That limitations will make it much simpler to implement. Later, we try to add more
     //! complexity and optimizations.
+
+    // TODO Comments on VI (those comments will focus only on synchronous state machines):
+    // One of the most important aspects of the VI is its signal lifetime. Also, to me, it
+    // was one of the most challenging aspects to think about, because we don't have the
+    // habit to think about it while developing software. For example, I have never think
+    // about what a return value of a function may be considered. Or what a while condition
+    // is. Now, while designing the prototype, I am obliged to think about it.
+    //
+    // Basically, there are three types of signal lifetimes that we may encounter in state
+    // machines, followed by my interpretation of them and what it means in the software
+    // context:
+    // - one-time signal: those will be consumed only once after they are emitted. Once
+    // consumed (even if they did not trigger anything), this kind of signal become absent
+    // until a new one comes. Their absence cannot be used as signal. As an example, we have
+    // a programming function that transforms a programming input into an VI. The
+    // programming function may generate any number of families of one-time VI signals.
+    //
+    // # Example
+    // fn parse(char)->ParseResult{ ReadAlphanumeric, ReadOther}
+    // fn check_for_even_and_greater_than(input: num, reference: num)->(OddResult{IsOdd, IsEven},
+    // GreateResult{IsGreater, IsNotGreater})
+    // - static signal: those will not be consumed after they are changed. They will remain
+    // the same until their IO-object or item request their change. They will store the last
+    // updated value to be used anytime a condition has this kind of signal.
+    // counter-> States{ Over, Counting, Init}
+    //
+    // They may be represented as states of other state machines.
+    // struct variableX -> states {Positive, Negative, NotDefined}
+    // - limited duration signal: those will not be consumed after they are changed, but
+    // they may change
 
     use std::collections::{HashMap, HashSet};
 
@@ -231,7 +527,9 @@ mod stateworks {
         let state_machine = StateMachine::new();
 
         // process the input into
+        12
     }
+    */
 }
 
 /// Counts the number of words in a given string. Each word is separated by white spaces.
@@ -248,11 +546,13 @@ fn word_counter_reference(text: &str) -> u32 {
  * return an u32.
  */
 fn word_counter_state_machine(text: &str) -> u32 {
-    word_counter(text)
+    12
+    //word_counter(text)
 }
 
 fn main() {
-    println!("Hello, world!");
+    let sm = StateMachine::init();
+    println!("My state machine: {sm:#?}");
 }
 
 #[cfg(test)]
