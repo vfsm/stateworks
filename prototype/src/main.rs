@@ -42,6 +42,7 @@ use prototype_stateworks::StateMachine;
 mod prototype_stateworks {
     use std::{
         collections::{HashMap, HashSet},
+        fmt::Display,
         sync::OnceLock,
     };
 
@@ -49,6 +50,7 @@ mod prototype_stateworks {
     // It will have a programming interface to receive a stream of chars and, for each char,
     // it will generate some VI value that will make the state machine update its state
 
+    #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
     enum VirtualInputType {
         Event,
         StaticSignal,
@@ -74,11 +76,20 @@ mod prototype_stateworks {
     }
 
     #[derive(Debug, Clone, Copy)]
-    enum VirtualOutput {}
+    enum VirtualOutput {
+        PrintHello,
+    }
+
+    fn print_hello() {
+        println!("Hello world from state machine");
+    }
 
     impl VirtualOutput {
         fn execute(&self) {
-            println!("Executing: {self:?}")
+            println!("Executing: {self:?}");
+            match self {
+                VirtualOutput::PrintHello => print_hello(),
+            }
         }
     }
 
@@ -106,7 +117,7 @@ mod prototype_stateworks {
     pub struct StateMachine {
         current_state: State,
         virtual_input: HashSet<VirtualInput>,
-        always: Vec<(Condition, VirtualOutput)>,
+        global_input_actions: Vec<(Condition, VirtualOutput)>,
     }
     static STATES: OnceLock<HashMap<State, StateSpec>> = OnceLock::new();
 
@@ -158,12 +169,34 @@ mod prototype_stateworks {
             ])
         })[&state]
     }
+    impl Display for State {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let name = match self {
+                State::Init => "Init",
+                State::Alphanumeric => "Alphanumeric",
+                State::Other => "Other",
+            };
+            write!(f, "{name}",)
+        }
+    }
+    impl Display for StateMachine {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "-------------------------------------------\n")?;
+            write!(f, "|              State Machine              |\n")?;
+            write!(f, "|State: {:<34}|\n", self.current_state.to_string())?;
+            write!(f, "|Virtual Input: {:?}\n", self.virtual_input)?;
+            write!(f, "-------------------------------------------")
+        }
+    }
     impl StateMachine {
         pub fn init() -> Self {
             let mut state_machine = StateMachine {
                 virtual_input: HashSet::new(),
                 current_state: State::Init,
-                always: vec![],
+                global_input_actions: vec![(
+                    Condition(HashSet::from_iter(vec![VirtualInput::Always])),
+                    VirtualOutput::PrintHello,
+                )],
             };
             // initiate the state machine
             state_machine.execute();
@@ -179,6 +212,7 @@ mod prototype_stateworks {
         }
 
         fn execute(&mut self) {
+            println!("State machine before:\n{self}");
             let mut current_state = get_state_spec(self.current_state);
             println!("┌─────────────────────────────────────────");
             println!("│ Executing the state machine");
@@ -191,6 +225,15 @@ mod prototype_stateworks {
             for (condition, virtual_output) in &current_state.input_actions {
                 if self.accepts_condition(condition) {
                     println!("│  ✓ Condition met: {condition:?}");
+                    println!("│    Executing: {virtual_output:?}");
+                    virtual_output.execute();
+                }
+            }
+
+            // execute global input actions
+            for (condition, virtual_output) in &self.global_input_actions {
+                if self.accepts_condition(condition) {
+                    println!("│  ✓ Condition met (global): {condition:?}");
                     println!("│    Executing: {virtual_output:?}");
                     virtual_output.execute();
                 }
@@ -236,11 +279,47 @@ mod prototype_stateworks {
                     }
                 }
                 if !need_to_check_for_transition {
+                    // consume the one-time events (they only live until up to the first
+                    // transition)
+                    self.consume_events();
                     break;
                 }
+                // consume the one-time events (they only live until up to the first
+                // transition)
+                self.consume_events();
             }
             println!("└─────────────────────────────────────────");
-            println!("State machine returned to idle");
+            println!("State machine returned to idle\n{self}");
+        }
+
+        fn consume_events(&mut self) {
+            // This may be improved in the future separating Events from static signals
+            self.virtual_input
+                .retain(|e| e.r#type() != VirtualInputType::Event);
+        }
+
+        fn emit_events(&mut self, events: Vec<VirtualInput>) {
+            assert!(
+                events.iter().all(|e| e.r#type() == VirtualInputType::Event),
+                "emit_events only accept events"
+            );
+            self.virtual_input.extend(events);
+        }
+
+        // StreamInputInterface
+        // (this function will be implemented and designed, including name, by the user)
+        pub fn send_char(&mut self, c: char) {
+            println!("#########################################");
+            println!("#==> CharInputInterface emitting: '{c}' #");
+            println!("#########################################");
+            if c.is_alphanumeric() {
+                self.emit_events(vec![VirtualInput::ReadAlphanumeric]);
+            } else {
+                self.emit_events(vec![VirtualInput::ReadOther]);
+            }
+
+            // execute only after emitting an event
+            self.execute();
         }
     }
 
@@ -551,8 +630,8 @@ fn word_counter_state_machine(text: &str) -> u32 {
 }
 
 fn main() {
-    let sm = StateMachine::init();
-    println!("My state machine: {sm:#?}");
+    let mut sm = StateMachine::init();
+    sm.send_char('a');
 }
 
 #[cfg(test)]
