@@ -78,19 +78,13 @@ mod prototype_stateworks {
     #[derive(Debug, Clone, Copy)]
     enum VirtualOutput {
         PrintHello,
+
+        // IO-Object: Counter
+        IncrementCounter,
     }
 
     fn print_hello() {
         println!("Hello world from state machine");
-    }
-
-    impl VirtualOutput {
-        fn execute(&self) {
-            println!("Executing: {self:?}");
-            match self {
-                VirtualOutput::PrintHello => print_hello(),
-            }
-        }
     }
 
     #[derive(Debug, Clone)]
@@ -99,8 +93,8 @@ mod prototype_stateworks {
     #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
     enum State {
         Init,
-        Alphanumeric,
-        Other,
+        InWord,
+        OutWord,
     }
 
     #[derive(Debug, Clone)]
@@ -108,18 +102,31 @@ mod prototype_stateworks {
         name: &'static str,
         entry_actions: Vec<VirtualOutput>,
         exit_actions: Vec<VirtualOutput>,
-        transition_actions: Vec<VirtualOutput>,
         input_actions: Vec<(Condition, VirtualOutput)>,
-        transitions: Vec<(Condition, State)>,
+        /// The last element of the tuple is the array of transition actions
+        transitions: Vec<(Condition, State, Vec<VirtualOutput>)>,
     }
 
     #[derive(Debug)]
     pub struct StateMachine {
         current_state: State,
         virtual_input: HashSet<VirtualInput>,
-        global_input_actions: Vec<(Condition, VirtualOutput)>,
+        // TODO maybe creating a StateMachine struct as the top level is not the best approach. Create an
+        // RTDB/VFSM struct may be better. Every IO object and state machine may be included
+        // to this VFSM. I don't know, something like that.
+        counter: u32,
     }
     static STATES: OnceLock<HashMap<State, StateSpec>> = OnceLock::new();
+    static GLOBAL_INPUT_ACTIONS: OnceLock<Vec<(Condition, VirtualOutput)>> = OnceLock::new();
+
+    fn get_global_input_actions() -> &'static Vec<(Condition, VirtualOutput)> {
+        &GLOBAL_INPUT_ACTIONS.get_or_init(|| {
+            vec![(
+                Condition(HashSet::from_iter(vec![VirtualInput::Always])),
+                VirtualOutput::PrintHello,
+            )]
+        })
+    }
 
     fn get_state_spec(state: State) -> &'static StateSpec {
         &STATES.get_or_init(|| {
@@ -130,39 +137,39 @@ mod prototype_stateworks {
                         name: "init",
                         entry_actions: vec![],
                         exit_actions: vec![],
-                        transition_actions: vec![],
                         input_actions: vec![],
                         transitions: vec![(
                             Condition(HashSet::from_iter(vec![VirtualInput::Always])),
-                            State::Other,
+                            State::OutWord,
+                            vec![],
                         )],
                     },
                 ),
                 (
-                    State::Alphanumeric,
+                    State::OutWord,
                     StateSpec {
-                        name: "alphanumeric",
+                        name: "out_word",
                         entry_actions: vec![],
                         exit_actions: vec![],
-                        transition_actions: vec![],
-                        input_actions: vec![],
-                        transitions: vec![(
-                            Condition(HashSet::from_iter(vec![VirtualInput::ReadOther])),
-                            State::Other,
-                        )],
-                    },
-                ),
-                (
-                    State::Other,
-                    StateSpec {
-                        name: "other",
-                        entry_actions: vec![],
-                        exit_actions: vec![],
-                        transition_actions: vec![],
                         input_actions: vec![],
                         transitions: vec![(
                             Condition(HashSet::from_iter(vec![VirtualInput::ReadAlphanumeric])),
-                            State::Alphanumeric,
+                            State::InWord,
+                            vec![VirtualOutput::IncrementCounter],
+                        )],
+                    },
+                ),
+                (
+                    State::InWord,
+                    StateSpec {
+                        name: "in_word",
+                        entry_actions: vec![],
+                        exit_actions: vec![],
+                        input_actions: vec![],
+                        transitions: vec![(
+                            Condition(HashSet::from_iter(vec![VirtualInput::ReadOther])),
+                            State::OutWord,
+                            vec![],
                         )],
                     },
                 ),
@@ -173,8 +180,8 @@ mod prototype_stateworks {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             let name = match self {
                 State::Init => "Init",
-                State::Alphanumeric => "Alphanumeric",
-                State::Other => "Other",
+                State::InWord => "Alphanumeric",
+                State::OutWord => "Other",
             };
             write!(f, "{name}",)
         }
@@ -193,10 +200,7 @@ mod prototype_stateworks {
             let mut state_machine = StateMachine {
                 virtual_input: HashSet::new(),
                 current_state: State::Init,
-                global_input_actions: vec![(
-                    Condition(HashSet::from_iter(vec![VirtualInput::Always])),
-                    VirtualOutput::PrintHello,
-                )],
+                counter: 0,
             };
             // initiate the state machine
             state_machine.execute();
@@ -226,16 +230,16 @@ mod prototype_stateworks {
                 if self.accepts_condition(condition) {
                     println!("│  ✓ Condition met: {condition:?}");
                     println!("│    Executing: {virtual_output:?}");
-                    virtual_output.execute();
+                    self.execute_virtual_output(*virtual_output);
                 }
             }
 
             // execute global input actions
-            for (condition, virtual_output) in &self.global_input_actions {
+            for (condition, virtual_output) in get_global_input_actions() {
                 if self.accepts_condition(condition) {
                     println!("│  ✓ Condition met (global): {condition:?}");
                     println!("│    Executing: {virtual_output:?}");
-                    virtual_output.execute();
+                    self.execute_virtual_output(*virtual_output);
                 }
             }
 
@@ -245,21 +249,21 @@ mod prototype_stateworks {
             println!("│ Checking for transitions:");
             loop {
                 need_to_check_for_transition = false;
-                for (condition, next_state) in &current_state.transitions {
+                for (condition, next_state, transition_actions) in &current_state.transitions {
                     if self.accepts_condition(condition) {
                         println!("│  ✓ Transition triggered: {condition:?} → {next_state:?}");
 
                         println!("│    ┌─ Executing transition actions");
-                        for virtual_output in &current_state.transition_actions {
+                        for virtual_output in transition_actions {
                             println!("│    │  • {virtual_output:?}");
-                            virtual_output.execute();
+                            self.execute_virtual_output(*virtual_output);
                         }
 
                         // execute exit actions
                         println!("│    ├─ Executing exit actions");
                         for virtual_output in &current_state.exit_actions {
                             println!("│    │  • {virtual_output:?}");
-                            virtual_output.execute();
+                            self.execute_virtual_output(*virtual_output);
                         }
 
                         // Make the transition
@@ -271,7 +275,7 @@ mod prototype_stateworks {
                         println!("│       ┌─ Executing entry actions");
                         for virtual_output in &current_state.entry_actions {
                             println!("│       │  • {virtual_output:?}");
-                            virtual_output.execute();
+                            self.execute_virtual_output(*virtual_output);
                         }
                         println!("│       └─────────────────────────");
                         need_to_check_for_transition = true;
@@ -290,6 +294,14 @@ mod prototype_stateworks {
             }
             println!("└─────────────────────────────────────────");
             println!("State machine returned to idle\n{self}");
+        }
+
+        fn execute_virtual_output(&mut self, vo: VirtualOutput) {
+            println!("Executing: {vo:?}");
+            match vo {
+                VirtualOutput::PrintHello => print_hello(),
+                VirtualOutput::IncrementCounter => self.increment_counter(),
+            }
         }
 
         fn consume_events(&mut self) {
@@ -320,6 +332,16 @@ mod prototype_stateworks {
 
             // execute only after emitting an event
             self.execute();
+        }
+
+        // CounterOutputInterface
+        pub fn read_counter(&self) -> u32 {
+            println!("(counter = {})", self.counter);
+            self.counter
+        }
+
+        fn increment_counter(&mut self) {
+            self.counter += 1;
         }
     }
 
@@ -625,13 +647,28 @@ fn word_counter_reference(text: &str) -> u32 {
  * return an u32.
  */
 fn word_counter_state_machine(text: &str) -> u32 {
-    12
-    //word_counter(text)
+    let mut sm = StateMachine::init();
+    for c in text.chars() {
+        sm.send_char(c);
+    }
+    sm.read_counter()
 }
 
 fn main() {
     let mut sm = StateMachine::init();
+    sm.read_counter();
     sm.send_char('a');
+    sm.read_counter();
+    sm.send_char('b');
+    sm.send_char('b');
+    sm.send_char('b');
+    sm.send_char('c');
+    sm.read_counter();
+    sm.send_char('\n');
+    sm.read_counter();
+    sm.send_char('2');
+    sm.send_char('3');
+    sm.read_counter();
 }
 
 #[cfg(test)]
