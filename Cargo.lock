@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "prototype"
+name = "prototype1_word_counter"
 version = "0.1.0"
