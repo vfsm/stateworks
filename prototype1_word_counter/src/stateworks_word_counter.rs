@@ -5,10 +5,33 @@ use std::{
 };
 
 // user implemented functions...
-fn print_hello() {
+#[allow(non_snake_case)]
+fn USER_print_hello() {
     println!("Hello world from state machine");
 }
 
+#[allow(non_snake_case)]
+fn USER_increment_counter(counter: &mut u32) {
+    *counter += 1;
+}
+
+#[allow(non_snake_case)]
+fn USER_send_char(c: char) -> Vec<Event> {
+    println!("#########################################");
+    println!("#==> CharInputInterface emitting: '{c}' #");
+    println!("#########################################");
+    if c.is_alphanumeric() {
+        vec![Event::ReadAlphanumeric]
+    } else {
+        vec![Event::ReadOther]
+    }
+}
+
+#[allow(non_snake_case)]
+fn USER_read_counter(counter: u32) -> u32 {
+    println!("(counter = {})", counter);
+    counter
+}
 //---------------------------------------------------------------------------------------
 
 // Virtual Inputs: They may be either static signal or events (one-time signal)
@@ -17,12 +40,6 @@ enum Event {
     // IO-Object: CharStreamInput
     ReadAlphanumeric,
     ReadOther,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
-enum StaticSignal {
-    // Always static signal
-    Always,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -36,7 +53,7 @@ enum VirtualOutput {
 #[derive(Debug)]
 struct VirtualInput {
     events: HashSet<Event>,
-    static_signals: HashSet<StaticSignal>,
+    static_signals: HashSet<State>,
 }
 
 impl VirtualInput {
@@ -53,9 +70,13 @@ impl VirtualInput {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 enum State {
+    // Main state machine
     Init,
     InWord,
     OutWord,
+
+    // Always static signal
+    Always,
 }
 
 #[derive(Debug)]
@@ -70,108 +91,17 @@ struct StateSpec {
 }
 
 #[derive(Debug)]
-pub struct StateMachine {
+pub struct RealTimeDatabase {
     current_state: State,
     virtual_input: VirtualInput,
-    // TODO maybe creating a StateMachine struct as the top level is not the best approach. Create an
-    // RTDB/VFSM struct may be better. Every IO object and state machine may be included
-    // to this VFSM. I don't know, something like that.
+
+    // Variable: u32
     counter: u32,
 }
-static STATES: OnceLock<HashMap<State, StateSpec>> = OnceLock::new();
-static GLOBAL_INPUT_ACTIONS: OnceLock<Vec<(VirtualInput, VirtualOutput)>> = OnceLock::new();
 
-fn get_global_input_actions() -> &'static Vec<(VirtualInput, VirtualOutput)> {
-    &GLOBAL_INPUT_ACTIONS.get_or_init(|| {
-        vec![(
-            VirtualInput {
-                events: HashSet::new(),
-                static_signals: HashSet::from_iter(vec![StaticSignal::Always]),
-            },
-            VirtualOutput::PrintHello,
-        )]
-    })
-}
-
-fn get_state_spec(state: State) -> &'static StateSpec {
-    &STATES.get_or_init(|| {
-        HashMap::from_iter(vec![
-            (
-                State::Init,
-                StateSpec {
-                    name: "init",
-                    entry_actions: vec![],
-                    exit_actions: vec![],
-                    input_actions: vec![],
-                    transitions: vec![(
-                        VirtualInput {
-                            events: HashSet::new(),
-                            static_signals: HashSet::from_iter(vec![StaticSignal::Always]),
-                        },
-                        State::OutWord,
-                        vec![],
-                    )],
-                },
-            ),
-            (
-                State::OutWord,
-                StateSpec {
-                    name: "out_word",
-                    entry_actions: vec![],
-                    exit_actions: vec![],
-                    input_actions: vec![],
-                    transitions: vec![(
-                        VirtualInput {
-                            events: HashSet::from_iter(vec![Event::ReadAlphanumeric]),
-                            static_signals: HashSet::new(),
-                        },
-                        State::InWord,
-                        vec![VirtualOutput::IncrementCounter],
-                    )],
-                },
-            ),
-            (
-                State::InWord,
-                StateSpec {
-                    name: "in_word",
-                    entry_actions: vec![],
-                    exit_actions: vec![],
-                    input_actions: vec![],
-                    transitions: vec![(
-                        VirtualInput {
-                            events: HashSet::from_iter(vec![Event::ReadOther]),
-                            static_signals: HashSet::new(),
-                        },
-                        State::OutWord,
-                        vec![],
-                    )],
-                },
-            ),
-        ])
-    })[&state]
-}
-impl Display for State {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let name = match self {
-            State::Init => "Init",
-            State::InWord => "InWord",
-            State::OutWord => "OutWord",
-        };
-        write!(f, "{name}",)
-    }
-}
-impl Display for StateMachine {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "-------------------------------------------\n")?;
-        write!(f, "|              State Machine              |\n")?;
-        write!(f, "|State: {:<34}|\n", self.current_state.to_string())?;
-        write!(f, "|Virtual Input: {:?}\n", self.virtual_input)?;
-        write!(f, "-------------------------------------------")
-    }
-}
-impl StateMachine {
+impl RealTimeDatabase {
     pub fn init() -> Self {
-        let mut state_machine = StateMachine {
+        let mut state_machine = RealTimeDatabase {
             virtual_input: VirtualInput::new(),
             current_state: State::Init,
             counter: 0,
@@ -182,7 +112,7 @@ impl StateMachine {
     }
 
     fn accepts_condition(&self, condition: &VirtualInput) -> bool {
-        condition.static_signals.contains(&StaticSignal::Always)
+        condition.static_signals.contains(&State::Always)
             || condition.is_subset(&self.virtual_input)
     }
 
@@ -274,7 +204,7 @@ impl StateMachine {
     fn execute_virtual_output(&mut self, vo: VirtualOutput) {
         println!("Executing: {vo:?}");
         match vo {
-            VirtualOutput::PrintHello => print_hello(),
+            VirtualOutput::PrintHello => self.print_hello(),
             VirtualOutput::IncrementCounter => self.increment_counter(),
         }
     }
@@ -283,61 +213,119 @@ impl StateMachine {
         self.virtual_input.events.clear();
     }
 
-    fn emit_events(&mut self, events: Vec<Event>) {
+    fn emit_events_and_execute(&mut self, events: Vec<Event>) {
         self.virtual_input.events.extend(events);
+        self.execute();
+    }
+
+    pub fn print_hello(&self) {
+        USER_print_hello();
     }
 
     // StreamInputInterface
-    // (this function will be implemented and designed, including name, by the user)
     pub fn send_char(&mut self, c: char) {
-        println!("#########################################");
-        println!("#==> CharInputInterface emitting: '{c}' #");
-        println!("#########################################");
-        // TODO the user must implement only the function that defines which VI will be
-        // triggered. This method (send_char) must not be edited by the user.
-        // user_callback(c);
-        if c.is_alphanumeric() {
-            self.emit_events(vec![Event::ReadAlphanumeric]);
-        } else {
-            self.emit_events(vec![Event::ReadOther]);
-        }
-        // finish user callback
-
-        // execute only after emitting an event
-        self.execute();
+        self.emit_events_and_execute(USER_send_char(c));
     }
 
     // CounterOutputInterface
     pub fn read_counter(&self) -> u32 {
-        // TODO here, the same, the user must be allowed only to edit a callback that
-        // will receive the variable as input (allowing logs, transformations, etc), but
-        // nothing more.
-        println!("(counter = {})", self.counter);
-        self.counter
+        USER_read_counter(self.counter)
     }
 
     fn increment_counter(&mut self) {
-        // TODO the user must only implement a callback which receive the reference to
-        // the variable that will be changed
-        self.counter += 1;
+        USER_increment_counter(&mut self.counter);
     }
 }
 
-/*
-struct VFSM {}
+static STATES: OnceLock<HashMap<State, StateSpec>> = OnceLock::new();
+static GLOBAL_INPUT_ACTIONS: OnceLock<Vec<(VirtualInput, VirtualOutput)>> = OnceLock::new();
 
-impl VFSM {
-    // execute a cycle of execution
-    fn execute(&self) {
-        // Check for input action condition
-    }
+fn get_global_input_actions() -> &'static Vec<(VirtualInput, VirtualOutput)> {
+    &GLOBAL_INPUT_ACTIONS.get_or_init(|| {
+        vec![(
+            VirtualInput {
+                events: HashSet::new(),
+                static_signals: HashSet::from_iter(vec![State::Always]),
+            },
+            VirtualOutput::PrintHello,
+        )]
+    })
+}
 
-    fn add_char_to_stream(&self, c: char) {
-        if c.is_alphanumeric() {
-            // emit ReadAlphanumeric
-            return;
-        }
-        // emit ReadOther
+fn get_state_spec(state: State) -> &'static StateSpec {
+    &STATES.get_or_init(|| {
+        HashMap::from_iter(vec![
+            (
+                State::Init,
+                StateSpec {
+                    name: "init",
+                    entry_actions: vec![],
+                    exit_actions: vec![],
+                    input_actions: vec![],
+                    transitions: vec![(
+                        VirtualInput {
+                            events: HashSet::new(),
+                            static_signals: HashSet::from_iter(vec![State::Always]),
+                        },
+                        State::OutWord,
+                        vec![],
+                    )],
+                },
+            ),
+            (
+                State::OutWord,
+                StateSpec {
+                    name: "out_word",
+                    entry_actions: vec![],
+                    exit_actions: vec![],
+                    input_actions: vec![],
+                    transitions: vec![(
+                        VirtualInput {
+                            events: HashSet::from_iter(vec![Event::ReadAlphanumeric]),
+                            static_signals: HashSet::new(),
+                        },
+                        State::InWord,
+                        vec![VirtualOutput::IncrementCounter],
+                    )],
+                },
+            ),
+            (
+                State::InWord,
+                StateSpec {
+                    name: "in_word",
+                    entry_actions: vec![],
+                    exit_actions: vec![],
+                    input_actions: vec![],
+                    transitions: vec![(
+                        VirtualInput {
+                            events: HashSet::from_iter(vec![Event::ReadOther]),
+                            static_signals: HashSet::new(),
+                        },
+                        State::OutWord,
+                        vec![],
+                    )],
+                },
+            ),
+        ])
+    })[&state]
+}
+impl Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let name = match self {
+            State::Init => "Init",
+            State::InWord => "InWord",
+            State::OutWord => "OutWord",
+            State::Always => "Always",
+        };
+        write!(f, "{name}",)
     }
 }
-*/
+impl Display for RealTimeDatabase {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "-------------------------------------------\n")?;
+        write!(f, "|              State Machine              |\n")?;
+        write!(f, "|State: {:<34}|\n", self.current_state.to_string())?;
+        write!(f, "|Virtual Input: {:?}\n", self.virtual_input)?;
+        write!(f, "-------------------------------------------")
+    }
+}

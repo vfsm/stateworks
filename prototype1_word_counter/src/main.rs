@@ -1,5 +1,5 @@
 mod stateworks_word_counter;
-use stateworks_word_counter::StateMachine;
+use stateworks_word_counter::RealTimeDatabase;
 
 /// Counts the number of words in a given string. Each word is separated by white spaces.
 ///
@@ -15,7 +15,7 @@ fn word_counter_reference(text: &str) -> u32 {
  * return an u32.
  */
 fn word_counter_state_machine(text: &str) -> u32 {
-    let mut sm = StateMachine::init();
+    let mut sm = RealTimeDatabase::init();
     // TODO the user must implement only that below. The complete function is a wrapper on
     // the user implemented callback
     for c in text.chars() {
@@ -28,7 +28,7 @@ fn word_counter_state_machine(text: &str) -> u32 {
 // Also, TODO we need to think about how it will be implemented: as a separate crate or the
 // code will be integrated to the current crate, or both?
 fn main() {
-    let mut sm = StateMachine::init();
+    let mut sm = RealTimeDatabase::init();
     sm.read_counter();
     sm.send_char('a');
     sm.read_counter();
