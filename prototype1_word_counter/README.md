@@ -83,6 +83,17 @@ and for the implementation of the first beta model.
       decision that will be made) is how the execution of the
       state machines should be handled. The next prototype will address
       that.
+      Either each time one state machine execute, we need to update its VI
+      or each time some state machine changes its state we may need to
+      update all the dependent state machines (machines that use its
+      state as VI). 
+      What happens when we have a cycle in the dependency graph of state
+      machines? We may have a deadlock in the initialization. We may
+      solve the deadlock allowing one of them to initialize first
+      considering that its VI will not have any state from the dependent
+      machines. That will be a temporary inconsistency but may solve the
+      deadlock. Ideally, we should not have cycles in the dependency
+      graph of state machines.
     - The virtual input originally (stateWORKS original description) is
       only of the static input kind. Basically, when someone want to
       simulate an one-time signal, one has to make a transition followed
@@ -136,6 +147,9 @@ and for the implementation of the first beta model.
   until a new one comes. Their absence cannot be used as signal. As an example, we have
   a programming function that transforms a programming input into an VI. The
   programming function may generate any number of families of one-time VI signals.
+
+- Events must be directed to state machines. They may be directed to all
+  state machines.
 
 
 - I think one-time signals and static signals can be considered as
